@@ -1,0 +1,197 @@
+DECLARE @YearStart date = '2026-01-05';
+DECLARE @YearEnd   date = '2026-12-31';
+
+DECLARE @cols nvarchar(max) = N'';
+DECLARE @sql  nvarchar(max) = N'';
+
+;WITH Weeks AS (
+    SELECT @YearStart AS WeekStart
+
+    UNION ALL
+
+    SELECT DATEADD(WEEK, 1, WeekStart)
+    FROM Weeks
+    WHERE DATEADD(WEEK, 1, WeekStart) <= @YearEnd
+)
+SELECT @cols =
+(
+    SELECT
+        N',
+    MAX(CASE WHEN cg.WeekStart = CONVERT(date, ''' 
+        + CONVERT(varchar(10), WeekStart, 120) + N''')
+             THEN cg.CalendarValue END) AS [' 
+        + CONVERT(varchar(10), WeekStart, 120) + N']'
+    FROM Weeks
+    ORDER BY WeekStart
+    FOR XML PATH(''), TYPE
+).value('.', 'nvarchar(max)')
+OPTION (MAXRECURSION 60);
+
+SET @sql = N'
+WITH Weeks AS (
+    SELECT @YearStart AS WeekStart
+
+    UNION ALL
+
+    SELECT DATEADD(WEEK, 1, WeekStart)
+    FROM Weeks
+    WHERE DATEADD(WEEK, 1, WeekStart) <= @YearEnd
+),
+
+Base AS (
+    SELECT
+        aa.Id AS ActivityAssignment_Id,
+        r.Id AS Resource_Id,
+        e.DISPLAY_NAME AS Consultant_Name,
+        e.JOB_LEVEL AS Level,
+        e.DEPARTMENT AS Team,
+        e.DEPARTMENT AS [Group],
+        p.PROJECT_NAME AS Customer_Project_Name,
+        CAST(aa.KimbleOne__StartDate__c AS date) AS Assignment_Start,
+        CAST(aa.KimbleOne__ForecastP2EndDate__c AS date) AS Assignment_End
+    FROM REPL_SF.ActivityAssignment aa
+    JOIN REPL_SF.Resource r
+        ON r.Id = aa.KimbleOne__Resource__c
+    LEFT JOIN REPL_SF.[User] u
+        ON u.Id = r.KimbleOne__User__c
+    LEFT JOIN ANALYTICS.DIM_EMPLOYEE e
+        ON e.INTEGRATION_ID = u.Username
+    LEFT JOIN REPL_SF.ResourceActivity ra
+        ON ra.Id = aa.KimbleOne__ResourcedActivity__c
+    LEFT JOIN ANALYTICS.DIM_PROJECT p
+        ON p.PROJECT_ID = ra.Id
+    WHERE
+        e.DISPLAY_NAME IS NOT NULL
+        AND p.PROJECT_NAME IS NOT NULL
+        AND CAST(aa.KimbleOne__StartDate__c AS date) <= @YearEnd
+        AND ISNULL(CAST(aa.KimbleOne__ForecastP2EndDate__c AS date), @YearEnd) >= @YearStart
+),
+
+TimeEntryWeekly AS (
+    SELECT
+        te.KimbleOne__ActivityAssignment__c AS ActivityAssignment_Id,
+        DATEADD(WEEK, DATEDIFF(WEEK, 0, tp.KimbleOne__EndDate__c), 0) AS WeekStart,
+        SUM(te.KimbleOne__EntryUnits__c) AS Logged_Hours,
+        CASE
+            WHEN SUM(te.KimbleOne__EntryUnits__c) >= 40 THEN ''1''
+            WHEN SUM(te.KimbleOne__EntryUnits__c) >= 20 THEN ''0.5''
+            WHEN SUM(te.KimbleOne__EntryUnits__c) > 0
+                THEN CAST(CAST(SUM(te.KimbleOne__EntryUnits__c) / 40.0 AS decimal(10,2)) AS varchar(20))
+            ELSE ''0''
+        END AS Capacity
+    FROM REPL_SF.[TimeEntry] te
+    LEFT JOIN REPL_SF.TimePeriod tp
+        ON tp.Id = te.KimbleOne__TimePeriod__c
+    WHERE
+        te.KimbleOne__ActivityAssignment__c IS NOT NULL
+        AND tp.KimbleOne__EndDate__c >= @YearStart
+        AND tp.KimbleOne__EndDate__c <= @YearEnd
+    GROUP BY
+        te.KimbleOne__ActivityAssignment__c,
+        DATEADD(WEEK, DATEDIFF(WEEK, 0, tp.KimbleOne__EndDate__c), 0)
+),
+
+ApprovedLeaveWeekly AS (
+    SELECT
+        r.Id AS Resource_Id,
+        DATEADD(WEEK, DATEDIFF(WEEK, 0, CAST(fte.KimbleOne__TimePeriodStartDate__c AS date)), 0) AS WeekStart,
+        SUM(ISNULL(fte.KimbleOne__EntryUnits__c, 0)) AS Leave_Hours
+    FROM REPL_SF.ForecastTimeEntry fte
+    LEFT JOIN REPL_SF.ActivityAssignment aa
+        ON aa.Id = fte.KimbleOne__ActivityAssignment__c
+    LEFT JOIN REPL_SF.Resource r
+        ON r.Id = aa.KimbleOne__Resource__c
+    LEFT JOIN REPL_SF.ResourceActivity ra
+        ON ra.Id = aa.KimbleOne__ResourcedActivity__c
+    WHERE
+        CAST(fte.KimbleOne__TimePeriodStartDate__c AS date) >= @YearStart
+        AND CAST(fte.KimbleOne__TimePeriodStartDate__c AS date) <= @YearEnd
+        AND ISNULL(fte.KimbleOne__EntryUnits__c, 0) > 0
+        AND (
+            ra.Name LIKE ''%leave%''
+            OR ra.Name LIKE ''%holiday%''
+            OR ra.Name LIKE ''%vacation%''
+            OR ra.Name LIKE ''%annual%''
+        )
+    GROUP BY
+        r.Id,
+        DATEADD(WEEK, DATEDIFF(WEEK, 0, CAST(fte.KimbleOne__TimePeriodStartDate__c AS date)), 0)
+),
+
+ExpectedAvailability AS (
+    SELECT
+        Resource_Id,
+        ActivityAssignment_Id,
+        DATEADD(DAY, 1, Assignment_End) AS Expected_Availability_Date
+    FROM Base
+    WHERE Assignment_End IS NOT NULL
+),
+
+CalendarGrid AS (
+    SELECT
+        b.Team,
+        b.Consultant_Name,
+        b.Level,
+        b.[Group],
+        b.Customer_Project_Name,
+        ea.Expected_Availability_Date,
+        w.WeekStart,
+
+        CASE
+            WHEN al.Resource_Id IS NOT NULL THEN ''L''
+            WHEN w.WeekStart BETWEEN
+                    DATEADD(WEEK, DATEDIFF(WEEK, 0, b.Assignment_Start), 0)
+                    AND DATEADD(WEEK, DATEDIFF(WEEK, 0, ISNULL(b.Assignment_End, @YearEnd)), 0)
+                THEN ISNULL(tw.Capacity, ''0'')
+            ELSE ''V''
+        END AS CalendarValue
+
+    FROM Base b
+
+    CROSS JOIN Weeks w
+
+    LEFT JOIN TimeEntryWeekly tw
+        ON tw.ActivityAssignment_Id = b.ActivityAssignment_Id
+        AND tw.WeekStart = w.WeekStart
+
+    LEFT JOIN ApprovedLeaveWeekly al
+        ON al.Resource_Id = b.Resource_Id
+        AND al.WeekStart = w.WeekStart
+
+    LEFT JOIN ExpectedAvailability ea
+        ON ea.Resource_Id = b.Resource_Id
+        AND ea.ActivityAssignment_Id = b.ActivityAssignment_Id
+)
+
+SELECT
+    Team,
+    Consultant_Name,
+    Level,
+    [Group],
+    Customer_Project_Name,
+    Expected_Availability_Date
+' + @cols + N'
+
+FROM CalendarGrid cg
+
+GROUP BY
+    Team,
+    Consultant_Name,
+    Level,
+    [Group],
+    Customer_Project_Name,
+    Expected_Availability_Date
+
+ORDER BY
+    Team,
+    Consultant_Name,
+    Customer_Project_Name
+
+OPTION (MAXRECURSION 60);
+';
+
+EXEC sp_executesql
+    @sql,
+    N'@YearStart date, @YearEnd date',
+    @YearStart = @YearStart,
+    @YearEnd = @YearEnd;
