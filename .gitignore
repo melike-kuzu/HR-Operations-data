@@ -1,0 +1,75 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+secrets.toml
+.streamlit/secrets.toml
+
+# Streamlit
+.streamlit/cache/
+.streamlit/static/
+
+# Generated data
+data/*.parquet
+data/*.csv
+data/*.xlsx
+data/*.json
+output/
+outputs/
+reports_output/
+cache/
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# macOS
+.DS_Store
+
+# Temporary files
+*.tmp
+*.temp
+~$*
+
+# Temporary screenshots
+Screenshot*.png
+
+# Local Excel outputs
+*.xlsx
+
+# Temporary SQL copies
+* - Copy.sql
+
+# VS Code workspace
+*.code-workspace
