@@ -140,6 +140,90 @@ def calculate_capacity(logged_hours: pd.Series) -> pd.Series:
 
     return capacity.clip(lower=0, upper=1).round(2)
 
+def get_eligible_assignments(
+    assignments: pd.DataFrame,
+    as_of_date: str | date | pd.Timestamp | None = None,
+) -> pd.DataFrame:
+    """
+    Orijinal Consultant Tracker SQL'iyle aynı consultant population'ını
+    oluşturan geçerli proje assignment kayıtlarını döndürür.
+
+    Dahil edilme kuralları:
+    - Resource_Id mevcut olmalı.
+    - Consultant_Name mevcut olmalı.
+    - Project_Name mevcut olmalı.
+    - Assignment raporlama yılıyla kesişmeli.
+    """
+
+    settings = create_calendar_settings(as_of_date)
+
+    eligible = assignments.copy()
+
+    eligible["Assignment_Start"] = pd.to_datetime(
+        eligible["Assignment_Start"],
+        errors="coerce",
+    ).dt.normalize()
+
+    eligible["Assignment_End"] = pd.to_datetime(
+        eligible["Assignment_End"],
+        errors="coerce",
+    ).dt.normalize()
+
+    has_resource = eligible["Resource_Id"].notna()
+
+    has_consultant_name = (
+        eligible["Consultant_Name"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .ne("")
+    )
+
+    has_project = (
+        eligible["Project_Name"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .ne("")
+    )
+
+    overlaps_reporting_year = (
+        eligible["Assignment_Start"].notna()
+        & eligible["Assignment_Start"].le(settings.year_end)
+        & (
+            eligible["Assignment_End"].isna()
+            | eligible["Assignment_End"].ge(settings.year_start)
+        )
+    )
+
+    eligible = eligible.loc[
+        has_resource
+        & has_consultant_name
+        & has_project
+        & overlaps_reporting_year
+    ].copy()
+
+    return eligible.reset_index(drop=True)
+
+def get_eligible_resource_ids(
+    assignments: pd.DataFrame,
+    as_of_date: str | date | pd.Timestamp | None = None,
+) -> set[object]:
+    """
+    Geçerli consultant population'ındaki Resource_Id değerlerini döndürür.
+    """
+
+    eligible_assignments = get_eligible_assignments(
+        assignments=assignments,
+        as_of_date=as_of_date,
+    )
+
+    return set(
+        eligible_assignments["Resource_Id"]
+        .dropna()
+        .unique()
+    )
+
 
 def is_assignment_active_on_date(
     assignments: pd.DataFrame,
@@ -316,12 +400,20 @@ def get_consultant_directory(
 
 def get_resource_weekly_time(
     data: MasterData,
+    eligible_assignments: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     Assignment seviyesindeki haftalık saatleri resource seviyesinde toplar.
     """
 
-    assignment_map = data.assignments[
+
+    assignment_source = (
+        eligible_assignments
+        if eligible_assignments is not None
+        else data.assignments
+    )
+
+    assignment_map = assignment_source[
         [
             "ActivityAssignment_Id",
             "Resource_Id",
@@ -461,18 +553,27 @@ def build_consultant_calendar_base(
         settings.last_week_start,
     )
 
+    
+
+
+    eligible_assignments = get_eligible_assignments(
+        assignments=data.assignments,
+        as_of_date=settings.as_of_date,
+    )
+
     consultants = get_consultant_directory(
-        data.assignments
+        eligible_assignments
     )
 
     expected_availability = calculate_expected_availability(
-        data.assignments
+        eligible_assignments
     )
 
     active_projects = count_active_projects(
-        data.assignments,
+        eligible_assignments,
         settings.as_of_date,
     )
+
 
     consultants = consultants.merge(
         expected_availability,
@@ -509,12 +610,27 @@ def build_consultant_calendar_base(
         how="inner",
     ).drop(columns="_merge_key")
 
-    weekly_time = get_resource_weekly_time(data)
-
+    weekly_time = get_resource_weekly_time(
+        data=data,
+        eligible_assignments=eligible_assignments,
+    )
     weekly_leave = get_resource_weekly_leave(data)
 
+    eligible_resource_ids = set(
+        eligible_assignments["Resource_Id"]
+        .dropna()
+        .unique()
+    )
+
+    weekly_leave = weekly_leave.loc[
+        weekly_leave["Resource_Id"].isin(
+            eligible_resource_ids
+        )
+    ].copy()
+
+
     future_assignments = get_future_assignment_weeks(
-        assignments=data.assignments,
+        assignments=eligible_assignments,
         weeks=weeks,
         current_week_start=settings.current_week_start,
     )

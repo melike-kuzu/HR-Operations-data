@@ -1,0 +1,16 @@
+SELECT TOP 100
+    ra.Name,
+    COUNT(*) AS Total
+FROM REPL_SF.ForecastTimeEntry fte
+
+LEFT JOIN REPL_SF.ActivityAssignment aa
+    ON aa.Id = fte.KimbleOne__ActivityAssignment__c
+
+LEFT JOIN REPL_SF.ResourceActivity ra
+    ON ra.Id = aa.KimbleOne__ResourcedActivity__c
+
+GROUP BY
+    ra.Name
+
+ORDER BY
+    COUNT(*) DESC;

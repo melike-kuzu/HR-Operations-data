@@ -96,3 +96,32 @@ def test_consultant_tracker():
 
     print("\nTracker columns:")
     print(tracker.columns.tolist())
+
+
+def test_consultant_tracker_has_one_row_per_consultant():
+    data = load_master_data()
+
+    tracker = build_consultant_tracker(data)
+
+    consultant_count = (
+        tracker[
+            [
+                "Group",
+                "Consultant_Name",
+            ]
+        ]
+        .drop_duplicates()
+        .shape[0]
+    )
+
+    assert len(tracker) == consultant_count
+
+    assert not tracker.duplicated(
+        subset=[
+            "Group",
+            "Consultant_Name",
+        ]
+    ).any()
+
+    assert len(tracker) < 10_000
+    

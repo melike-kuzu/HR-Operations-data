@@ -2,35 +2,13 @@ SET NOCOUNT ON;
 
 DECLARE @Today date = CAST(GETDATE() AS date);
 
-DECLARE @CurrentWeekStart date =
-    DATEADD(
-        WEEK,
-        DATEDIFF(WEEK, 0, @Today),
-        0
-    );
-
-DECLARE @WindowStart date =
-    DATEADD(
-        YEAR,
-        -1,
-        @CurrentWeekStart
-    );
+DECLARE @YearStart date =
+    DATEFROMPARTS(YEAR(@Today), 1, 1);
 
 DECLARE @YearEnd date =
-    DATEFROMPARTS(
-        YEAR(@Today),
-        12,
-        31
-    );
+    DATEFROMPARTS(YEAR(@Today), 12, 31);
 
-
-/*
-    Bu sorgu her consultant için haftalık izin bilgisini üretir.
-
-    WeekStart her zaman pazartesidir.
-*/
-
-;WITH LeaveByType AS
+;WITH LeaveEntryBase AS
 (
     SELECT
         r.Id AS Resource_Id,
@@ -41,7 +19,8 @@ DECLARE @YearEnd date =
                 WEEK,
                 0,
                 CAST(
-                    fte.KimbleOne__TimePeriodStartDate__c AS date
+                    fte.KimbleOne__TimePeriodStartDate__c
+                    AS date
                 )
             ),
             0
@@ -53,69 +32,75 @@ DECLARE @YearEnd date =
             'Leave'
         ) AS Leave_Type,
 
-        SUM(
-            ISNULL(
-                fte.KimbleOne__EntryUnits__c,
-                0
-            )
+        ISNULL(
+            fte.KimbleOne__EntryUnits__c,
+            0
         ) AS Leave_Hours
 
     FROM REPL_SF.ForecastTimeEntry fte
 
     LEFT JOIN REPL_SF.ActivityAssignment aa
-        ON aa.Id = fte.KimbleOne__ActivityAssignment__c
-
-    LEFT JOIN REPL_SF.ResourceActivity ra
-        ON ra.Id = aa.KimbleOne__ResourcedActivity__c
+        ON aa.Id =
+            fte.KimbleOne__ActivityAssignment__c
 
     LEFT JOIN REPL_SF.Resource r
-        ON r.Id = aa.KimbleOne__Resource__c
+        ON r.Id =
+            aa.KimbleOne__Resource__c
+
+    LEFT JOIN REPL_SF.ResourceActivity ra
+        ON ra.Id =
+            aa.KimbleOne__ResourcedActivity__c
 
     WHERE
-        fte.KimbleOne__TimePeriodStartDate__c IS NOT NULL
-
-        AND CAST(
-                fte.KimbleOne__TimePeriodStartDate__c AS date
-            ) >= @WindowStart
-
-        AND CAST(
-                fte.KimbleOne__TimePeriodStartDate__c AS date
-            ) <= @YearEnd
+        CAST(
+            fte.KimbleOne__TimePeriodStartDate__c
+            AS date
+        ) BETWEEN @YearStart AND @YearEnd
 
         AND ISNULL(
-                fte.KimbleOne__EntryUnits__c,
-                0
-            ) <> 0
+            fte.KimbleOne__EntryUnits__c,
+            0
+        ) > 0
+
+        AND
+        (
+               LOWER(ISNULL(ra.Name, '')) LIKE '%leave%'
+            OR LOWER(ISNULL(ra.Name, '')) LIKE '%holiday%'
+            OR LOWER(ISNULL(ra.Name, '')) LIKE '%vacation%'
+            OR LOWER(ISNULL(ra.Name, '')) LIKE '%annual%'
+            OR LOWER(ISNULL(aa.Name, '')) LIKE '%leave%'
+            OR LOWER(ISNULL(aa.Name, '')) LIKE '%holiday%'
+            OR LOWER(ISNULL(aa.Name, '')) LIKE '%vacation%'
+            OR LOWER(ISNULL(aa.Name, '')) LIKE '%annual%'
+        )
+),
+
+LeaveByType AS
+(
+    SELECT
+        Resource_Id,
+        WeekStart,
+        Leave_Type,
+        SUM(Leave_Hours) AS Leave_Hours
+
+    FROM LeaveEntryBase
 
     GROUP BY
-        r.Id,
-
-        DATEADD(
-            WEEK,
-            DATEDIFF(
-                WEEK,
-                0,
-                CAST(
-                    fte.KimbleOne__TimePeriodStartDate__c AS date
-                )
-            ),
-            0
-        ),
-
-        COALESCE(
-            NULLIF(LTRIM(RTRIM(ra.Name)), ''),
-            NULLIF(LTRIM(RTRIM(aa.Name)), ''),
-            'Leave'
-        )
+        Resource_Id,
+        WeekStart,
+        Leave_Type
 )
 
 SELECT
     Resource_Id,
 
-    WeekStart,
+    CAST(
+        WeekStart AS date
+    ) AS WeekStart,
 
-    SUM(
-        Leave_Hours
+    CAST(
+        SUM(Leave_Hours)
+        AS decimal(18,2)
     ) AS Leave_Hours,
 
     CAST(
