@@ -73,3 +73,5 @@ Screenshot*.png
 
 # VS Code workspace
 *.code-workspace
+logs/
+data/runtime/

@@ -16,6 +16,8 @@ from ui.layout import configure_page
 from ui.layout import render_sidebar
 from ui.layout import render_top_header
 
+from workforce_assistant.config.logging_config import configure_logging
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
@@ -87,7 +89,7 @@ def create_navigation():
 
     assistant_page = st.Page(
         chatbot_page.render,
-        title="HR Assistant",
+        title="AI Workforce Assistant",
         icon=":material/smart_toy:",
         url_path="hr-assistant",
     )
@@ -120,8 +122,9 @@ def create_navigation():
 
 def main() -> None:
     """Run the HR Decision Support Platform."""
-
+    configure_logging()
     configure_page()
+    
 
     navigation = create_navigation()
 

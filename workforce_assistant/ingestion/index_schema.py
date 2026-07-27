@@ -1,0 +1,16 @@
+INDEX_FIELDS = [
+    "id",
+    "content",
+    "content_vector",
+    "title",
+    "source_type",
+    "source_file",
+    "consultant_name",
+    "skills",
+    "level",
+    "group",
+    "client",
+    "page_number",
+    "chunk_id",
+    "last_modified",
+]
