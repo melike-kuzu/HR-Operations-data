@@ -24,11 +24,22 @@ def handle_structured_route(
     dataframe = load_report(report_name)
 
     return ChatResponse(
-        answer=f"Loaded {report_name.replace('_', ' ')} with {len(dataframe)} row(s).",
-        route=route_type,
-        tables={report_name: dataframe},
-        metadata={"question": question, "report_name": report_name},
-    )
+    answer=(
+        f"Loaded {report_name.replace('_', ' ')} "
+        f"with {len(dataframe)} row(s)."
+    ),
+    route=route_type,
+    tables={
+        report_name: dataframe,
+    },
+    metadata={
+        "question": question,
+        "report_name": report_name,
+        "filters": {},
+        "replay_supported": True,
+    },
+)
+
 
 
 def handle_skill_lookup(question: str) -> ChatResponse:
@@ -183,6 +194,13 @@ def handle_skill_lookup(question: str) -> ChatResponse:
             "technologies"
         ],
         metadata={
+            "report_name": "technologies",
+            "filters": {
+                "search_terms": query_terms,
+                "current_employees_only": True,
+                "exclude_no_knowledge": True,
+            },
+            "replay_supported": True,
             "search_terms": query_terms,
             "employee_count": employee_count,
             "match_count": len(matches),

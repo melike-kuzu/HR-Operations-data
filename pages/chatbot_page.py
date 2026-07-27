@@ -15,6 +15,9 @@ from workforce_assistant.domain.conversation_models import (
 from workforce_assistant.services.chatbot_service import (
     ask_data_question,
 )
+from workforce_assistant.services.report_replay_service import (
+    ReportReplayService,
+)
 from workforce_assistant.services.service_factory import (
     get_conversation_service,
     get_user_service,
@@ -45,6 +48,7 @@ PENDING_QUESTION_KEY = (
 RUNTIME_TABLES_KEY = (
     "workforce_runtime_tables"
 )
+REPORT_REPLAY_SERVICE = ReportReplayService()
 
 
 def _get_services():
@@ -201,21 +205,42 @@ def _render_styles() -> None:
         unsafe_allow_html=True,
     )
 
-
 def _runtime_table_for_message(
-    message_id: str,
+    message: ConversationMessage,
 ) -> pd.DataFrame:
     runtime_tables = st.session_state.get(
         RUNTIME_TABLES_KEY,
         {},
     )
 
-    table = runtime_tables.get(message_id)
+    table = runtime_tables.get(
+        message.message_id
+    )
 
     if isinstance(table, pd.DataFrame):
         return table
 
-    return pd.DataFrame()
+    try:
+        replayed_table = (
+            REPORT_REPLAY_SERVICE.replay(
+                message.metadata
+            )
+        )
+    except Exception:
+        return pd.DataFrame()
+
+    if replayed_table.empty:
+        return pd.DataFrame()
+
+    runtime_tables[
+        message.message_id
+    ] = replayed_table
+
+    st.session_state[
+        RUNTIME_TABLES_KEY
+    ] = runtime_tables
+
+    return replayed_table
 
 
 def _render_message(
@@ -240,7 +265,7 @@ def _render_message(
             )
 
         table = _runtime_table_for_message(
-            message.message_id
+            message
         )
 
         if not table.empty:
@@ -261,15 +286,14 @@ def _render_message(
                     ),
                 )
 
+
+
         elif message.metadata.get(
             "table_row_count"
         ):
             st.caption(
-                "Supporting table metadata was saved, "
-                "but the live DataFrame is no longer "
-                "available after the application rerun."
+                "Supporting data could not be reloaded."
             )
-
 
 def _extract_first_table(
     result: dict[str, Any],
@@ -357,15 +381,13 @@ def _submit_question(
         ]
 
         route = result.get("route")
-        metadata = dict(
-            result.get("metadata", {})
-        )
-
         table = _extract_first_table(result)
 
-        metadata.update(
-            _table_metadata(table)
-        )
+        metadata = {
+            **dict(result.get("metadata", {})),
+            **_table_metadata(table),
+        }
+        
 
     except Exception as error:
         answer = (
