@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pandas as pd
@@ -22,6 +23,9 @@ from workforce_assistant.services.service_factory import (
     get_conversation_service,
     get_user_service,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 SUGGESTED_QUESTIONS = (
@@ -48,6 +52,7 @@ PENDING_QUESTION_KEY = (
 RUNTIME_TABLES_KEY = (
     "workforce_runtime_tables"
 )
+
 REPORT_REPLAY_SERVICE = ReportReplayService()
 
 
@@ -120,9 +125,9 @@ def _get_active_conversation_id() -> str:
     )
 
     if conversations:
-        active_id = conversations[
-            0
-        ].conversation_id
+        active_id = (
+            conversations[0].conversation_id
+        )
 
         st.session_state[
             ACTIVE_CONVERSATION_KEY
@@ -135,10 +140,12 @@ def _get_active_conversation_id() -> str:
 
 def _new_chat() -> None:
     _create_new_conversation()
+
     st.session_state.pop(
         PENDING_QUESTION_KEY,
         None,
     )
+
     st.rerun()
 
 
@@ -186,25 +193,6 @@ def _archive_chat(
     st.rerun()
 
 
-def _render_styles() -> None:
-    st.markdown(
-        """
-        <style>
-        .source-chip {
-            display: inline-block;
-            padding: .22rem .55rem;
-            margin: .15rem .25rem .1rem 0;
-            border-radius: 999px;
-            background: rgba(0,175,193,.11);
-            color: #006f79;
-            font-size: .75rem;
-            font-weight: 600;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
 def _runtime_table_for_message(
     message: ConversationMessage,
 ) -> pd.DataFrame:
@@ -227,6 +215,13 @@ def _runtime_table_for_message(
             )
         )
     except Exception:
+        logger.exception(
+            "Supporting table could not be replayed.",
+            extra={
+                "message_id": message.message_id,
+            },
+        )
+
         return pd.DataFrame()
 
     if replayed_table.empty:
@@ -243,6 +238,47 @@ def _runtime_table_for_message(
     return replayed_table
 
 
+def _normalise_sources(
+    raw_sources: Any,
+) -> list[str]:
+    """
+    Convert internal source objects into safe,
+    user-friendly source labels.
+
+    Raw IDs, search scores and internal metadata
+    are not exposed in the UI.
+    """
+
+    if not isinstance(raw_sources, list):
+        return []
+
+    sources: list[str] = []
+
+    for source in raw_sources:
+        label: str | None = None
+
+        if isinstance(source, dict):
+            label = (
+                source.get("title")
+                or source.get("consultant_name")
+                or source.get("source_file")
+            )
+
+        elif isinstance(source, str):
+            label = source
+
+        if not label:
+            continue
+
+        clean_label = str(label).strip()
+
+        if clean_label:
+            sources.append(clean_label)
+
+    # Remove duplicates while preserving order.
+    return list(dict.fromkeys(sources))
+
+
 def _render_message(
     message: ConversationMessage,
 ) -> None:
@@ -250,19 +286,12 @@ def _render_message(
         st.markdown(message.content)
 
         if message.sources:
-            chips = "".join(
-                (
-                    '<span class="source-chip">'
-                    f"{source}"
-                    "</span>"
-                )
-                for source in message.sources
-            )
-
-            st.markdown(
-                chips,
-                unsafe_allow_html=True,
-            )
+            with st.expander(
+                f"Sources ({len(message.sources)})",
+                expanded=False,
+            ):
+                for source in message.sources:
+                    st.write(f"• {source}")
 
         table = _runtime_table_for_message(
             message
@@ -286,14 +315,13 @@ def _render_message(
                     ),
                 )
 
-
-
         elif message.metadata.get(
             "table_row_count"
         ):
             st.caption(
                 "Supporting data could not be reloaded."
             )
+
 
 def _extract_first_table(
     result: dict[str, Any],
@@ -303,7 +331,10 @@ def _extract_first_table(
     if isinstance(table, pd.DataFrame):
         return table
 
-    tables = result.get("tables", {})
+    tables = result.get(
+        "tables",
+        {},
+    )
 
     if isinstance(tables, dict):
         for value in tables.values():
@@ -372,34 +403,56 @@ def _submit_question(
             )
         )
 
-        sources = [
-            str(source)
-            for source in result.get(
+        sources = _normalise_sources(
+            result.get(
                 "sources",
                 [],
             )
-        ]
+        )
 
         route = result.get("route")
-        table = _extract_first_table(result)
+
+        table = _extract_first_table(
+            result
+        )
 
         metadata = {
-            **dict(result.get("metadata", {})),
+            **dict(
+                result.get(
+                    "metadata",
+                    {},
+                )
+            ),
             **_table_metadata(table),
+            "success": True,
         }
-        
 
     except Exception as error:
+        logger.exception(
+            "Chat question could not be completed.",
+            extra={
+                "conversation_id": conversation_id,
+                "user_id": current_user.user_id,
+                "error_type": type(error).__name__,
+            },
+        )
+
+        # Do not expose internal exceptions,
+        # API keys, endpoints or stack traces.
         answer = (
             "I could not complete that request. "
-            f"Error: {error}"
+            "Please try again or contact the support team "
+            "if the problem continues."
         )
+
         sources = []
         route = "error"
+
         metadata = {
             "success": False,
             "error_type": type(error).__name__,
         }
+
         table = pd.DataFrame()
 
     assistant_message = (
@@ -453,7 +506,6 @@ def _render_sidebar(
 
 def render() -> None:
     _ensure_runtime_state()
-    _render_styles()
 
     conversation_service, current_user = (
         _get_services()
@@ -467,7 +519,9 @@ def render() -> None:
         conversation_id=conversation_id
     )
 
-    heading_columns = st.columns([5, 1])
+    heading_columns = st.columns(
+        [5, 1]
+    )
 
     with heading_columns[0]:
         render_page_heading(
@@ -487,7 +541,9 @@ def render() -> None:
         ):
             _new_chat()
 
-    st.caption("Suggested questions")
+    st.caption(
+        "Suggested questions"
+    )
 
     suggestion_columns = st.columns(2)
 
@@ -503,18 +559,23 @@ def render() -> None:
                 st.session_state[
                     PENDING_QUESTION_KEY
                 ] = question
+
                 st.rerun()
 
     st.divider()
 
-    messages = conversation_service.get_messages(
-        conversation_id,
-        user_id=current_user.user_id,
+    messages = (
+        conversation_service.get_messages(
+            conversation_id,
+            user_id=current_user.user_id,
+        )
     )
 
     if not messages:
         with st.chat_message("assistant"):
-            st.markdown(WELCOME_MESSAGE)
+            st.markdown(
+                WELCOME_MESSAGE
+            )
 
     for message in messages:
         _render_message(message)
@@ -540,4 +601,5 @@ def render() -> None:
             question,
             conversation_id=conversation_id,
         )
+
         st.rerun()

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import streamlit as st
 
+from pages import admin_audit
 from pages import chatbot_page
 from pages import dashboard
 from pages import report_view
@@ -74,7 +75,7 @@ def create_navigation():
 
     dashboard_page = st.Page(
         dashboard.render,
-        title="Dashboard",
+        title="Home",
         icon=":material/home:",
         url_path="dashboard",
         default=True,
@@ -101,6 +102,13 @@ def create_navigation():
         url_path="settings",
     )
 
+    admin_audit_page = st.Page(
+    admin_audit.render,
+    title="Admin / Audit",
+    icon=":material/admin_panel_settings:",
+    url_path="admin-audit",
+)
+
     report_viewer_page = st.Page(
         report_view.render,
         title="Report Viewer",
@@ -113,6 +121,7 @@ def create_navigation():
             dashboard_page,
             reports_page,
             assistant_page,
+            admin_audit_page,
             settings_page,
             report_viewer_page,
         ],

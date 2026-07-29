@@ -13,8 +13,10 @@ from workforce_assistant.handlers.search_handlers import (
 )
 from workforce_assistant.handlers.structured_handlers import (
     REPORT_BY_ROUTE,
-    handle_skill_lookup,
     handle_structured_route,
+)
+from workforce_assistant.repositories.azure_search_repository import (
+    AzureSearchRepository,
 )
 from workforce_assistant.repositories.search_repository import (
     InMemorySearchRepository,
@@ -33,10 +35,21 @@ class ChatbotService:
         self,
         search_repository: SearchRepository | None = None,
     ) -> None:
-        self._search_repository = (
-            search_repository
-            or InMemorySearchRepository()
-        )
+        if search_repository is not None:
+            self._search_repository = search_repository
+        else:
+            try:
+                self._search_repository = (
+                    AzureSearchRepository()
+                )
+            except Exception:
+                logger.exception(
+                    "Azure Search could not be initialised. "
+                    "Falling back to in-memory search."
+                )
+                self._search_repository = (
+                    InMemorySearchRepository()
+                )
 
     def ask(
         self,
@@ -58,6 +71,7 @@ class ChatbotService:
                 "request_id": current_request_id,
                 "user_id": user_id,
                 "conversation_id": conversation_id,
+                "question": question,
                 "question_length": len(question),
             },
         )
@@ -72,19 +86,27 @@ class ChatbotService:
                     question,
                 )
 
-            elif route_type == RouteType.SKILL_LOOKUP:
-                response = handle_skill_lookup(
-                    question
-                )
+
+
+
 
             elif route_type in {
+                RouteType.SKILL_LOOKUP,
                 RouteType.PROFILE_SEARCH,
                 RouteType.DOCUMENT_SEARCH,
             }:
+                search_route_type = route_type
+
+                if route_type == RouteType.SKILL_LOOKUP:
+                    search_route_type = (
+                        RouteType.PROFILE_SEARCH
+                    )
+
                 response = handle_search_route(
                     question,
-                    route_type,
+                    search_route_type,
                     self._search_repository,
+                    extracted_filters=decision.extracted_filters,
                 )
 
             else:
@@ -125,14 +147,27 @@ class ChatbotService:
                     "conversation_id": (
                         conversation_id
                     ),
+                    "question": question,
+                    "answer": response.answer,
                     "route": route_type.value,
                     "router_confidence": (
                         decision.confidence
                     ),
                     "response_time_ms": duration_ms,
+                    "report_name": response.metadata.get(
+                        "report_name"
+                    ),
+                    "filters": response.metadata.get(
+                        "filters",
+                        {},
+                    ),
+                    "table_row_count": response.metadata.get(
+                        "table_row_count"
+                    ),
                     "source_count": len(
                         response.sources
                     ),
+                    "sources": response.sources,
                     "table_count": len(
                         response.tables
                     ),
@@ -159,6 +194,7 @@ class ChatbotService:
                     "conversation_id": (
                         conversation_id
                     ),
+                    "question": question,
                     "response_time_ms": duration_ms,
                     "success": False,
                 },
